@@ -1,0 +1,27 @@
+{
+  "name": "fintrack-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dharshan209/fintrack-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Dharshan209/fintrack-bot/issues"
+  },
+  "homepage": "https://github.com/Dharshan209/fintrack-bot#readme",
+  "description": "",
+  "dependencies": {
+    "@google-cloud/vision": "^5.1.0",
+    "@supabase/supabase-js": "^2.49.8",
+    "dotenv": "^16.5.0",
+    "telegraf": "^4.16.3"
+  }
+}
