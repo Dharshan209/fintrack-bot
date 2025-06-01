@@ -1,11 +1,13 @@
 require('dotenv').config();
+const express = require('express');
 const { Telegraf, Markup } = require('telegraf');
 const { createClient } = require('@supabase/supabase-js');
 const vision = require('@google-cloud/vision');
 const path = require('path');
 const fs = require('fs');
-const fetch = require('node-fetch'); // install with npm i node-fetch@2
+const fetch = require('node-fetch'); // npm i node-fetch@2
 
+// Initialize bot and services
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
@@ -43,6 +45,7 @@ const categories = [
 ];
 
 // Keyboards
+
 const getMainMenuKeyboard = () => {
   return Markup.inlineKeyboard([
     [Markup.button.callback('💸 New Transaction', 'new_transaction')],
@@ -83,7 +86,8 @@ const getCategoryKeyboard = (type) => {
   return Markup.inlineKeyboard(keyboard);
 };
 
-// /start command
+// Bot logic
+
 bot.start((ctx) => {
   const welcomeMessage = `🌟 Welcome to Finance Tracker Bot!
 
@@ -98,268 +102,204 @@ bot.command('menu', (ctx) => {
   ctx.reply('🏠 Main Menu', getMainMenuKeyboard());
 });
 
-// Main menu actions
 bot.action('new_transaction', (ctx) => {
-  sessions.set(ctx.from.id, { step: 'method' });
-  ctx.answerCbQuery();
-  ctx.reply('💳 New Transaction\n\nHow would you like to add your transaction?', getTransactionMethodKeyboard());
+  sessions.set(ctx.from.id, {});
+  ctx.editMessageText('Select input method:', getTransactionMethodKeyboard());
 });
 
-bot.action('view_summary', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.reply('📊 Feature coming soon! This will show your spending summary.', 
-    Markup.inlineKeyboard([[Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]]));
+bot.action('back_to_menu', (ctx) => {
+  ctx.editMessageText('🏠 Main Menu', getMainMenuKeyboard());
 });
 
-bot.action('analytics', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.reply('📈 Feature coming soon! This will show detailed analytics.', 
-    Markup.inlineKeyboard([[Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]]));
-});
-
-bot.action('settings', (ctx) => {
-  ctx.answerCbQuery();
-  ctx.reply('⚙️ Feature coming soon! This will allow you to customize settings.', 
-    Markup.inlineKeyboard([[Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]]));
-});
-
-// Transaction method selection
 bot.action('method_manual', (ctx) => {
-  const session = sessions.get(ctx.from.id);
-  if (!session) return ctx.reply('❌ Session expired. Please start again.', getMainMenuKeyboard());
-
+  const session = sessions.get(ctx.from.id) || {};
   session.method = 'manual';
-  session.step = 'type';
-
-  ctx.answerCbQuery();
-  ctx.reply('✍️ Manual Entry\n\nWhat type of transaction is this?', getTypeKeyboard());
+  sessions.set(ctx.from.id, session);
+  ctx.editMessageText('Select transaction type:', getTypeKeyboard());
 });
 
 bot.action('method_photo', (ctx) => {
   const session = sessions.get(ctx.from.id) || {};
   session.method = 'photo';
-  session.step = 'photo_upload';
   sessions.set(ctx.from.id, session);
-
-  ctx.answerCbQuery();
-  ctx.reply('📷 Please upload a photo of your bill or receipt.');
-});
-
-// Handle photo uploads
-bot.on('photo', async (ctx) => {
-  const userId = ctx.from.id;
-  const session = sessions.get(userId);
-
-  if (!session || session.method !== 'photo' || session.step !== 'photo_upload') {
-    return ctx.reply('❌ Please select "Photo Entry" method first from the menu.');
-  }
-
-  try {
-    const photo = ctx.message.photo.pop(); // highest res photo
-    const fileId = photo.file_id;
-    const fileLink = await ctx.telegram.getFileLink(fileId);
-
-    // Download the image file
-    const res = await fetch(fileLink.href);
-    const buffer = await res.buffer();
-    const tempImagePath = path.join(__dirname, `temp-${userId}.jpg`);
-    fs.writeFileSync(tempImagePath, buffer);
-
-    // Use Vision API to detect text
-    const [result] = await visionClient.textDetection(tempImagePath);
-    const detections = result.textAnnotations;
-    fs.unlinkSync(tempImagePath); // remove temp file
-
-    if (!detections.length) {
-      return ctx.reply('❌ No readable text found in the image. Please try again or use manual entry.');
-    }
-
-    const fullText = detections[0].description;
-    console.log('Extracted Text:', fullText);
-
-    // Extract amount using regex (₹ or Rs optional)
-    const amountMatch = fullText.match(/(?:Rs|₹)?\s?(\d+(?:\.\d{1,2})?)/i);
-    const amount = amountMatch ? parseFloat(amountMatch[1]) : null;
-
-    if (!amount) {
-      return ctx.reply('❌ Could not extract amount from the image. Please try again or enter manually.');
-    }
-
-    // Save to session
-    session.amount = amount;
-    session.description = fullText.trim();
-    session.step = 'type';
-
-    await ctx.reply(`🧾 Detected Amount: ₹${amount}\n\n📝 Text:\n${fullText}\n\nWhat type of transaction is this?`, getTypeKeyboard());
-  } catch (error) {
-    console.error('Error processing photo:', error);
-    ctx.reply('❌ Error processing the image. Please try again or use manual entry.');
-  }
-});
-
-// Back navigation
-bot.action('back_to_menu', (ctx) => {
-  sessions.delete(ctx.from.id);
-  ctx.answerCbQuery();
-  ctx.reply('🏠 Main Menu', getMainMenuKeyboard());
+  ctx.editMessageText('Send a photo of your receipt or transaction document.');
 });
 
 bot.action('back_to_method', (ctx) => {
-  const session = sessions.get(ctx.from.id);
-  if (session) {
-    session.step = 'method';
-    delete session.type;
-  }
-  ctx.answerCbQuery();
-  ctx.reply('💳 New Transaction\n\nHow would you like to add your transaction?', getTransactionMethodKeyboard());
+  ctx.editMessageText('Select input method:', getTransactionMethodKeyboard());
+});
+
+bot.action(/type_(expense|income|saving)/, (ctx) => {
+  const type = ctx.match[1];
+  const session = sessions.get(ctx.from.id) || {};
+  session.type = type;
+  sessions.set(ctx.from.id, session);
+  ctx.editMessageText('Select a category:', getCategoryKeyboard(type));
 });
 
 bot.action('back_to_type', (ctx) => {
-  const session = sessions.get(ctx.from.id);
-  if (session) {
-    session.step = 'type';
-    delete session.category_name;
-  }
-  ctx.answerCbQuery();
-  ctx.reply('✍️ Manual Entry\n\nWhat type of transaction is this?', getTypeKeyboard());
+  ctx.editMessageText('Select transaction type:', getTypeKeyboard());
 });
 
-// Type selection
-bot.action(/type_(.+)/, async (ctx) => {
-  const type = ctx.match[1];
-  const userId = ctx.from.id;
-  const session = sessions.get(userId);
-  if (!session) return ctx.reply('❌ Session expired. Please start again.', getMainMenuKeyboard());
-
-  session.type = type;
-  session.step = 'category';
-
-  const typeEmoji = type === 'expense' ? '💸' : type === 'income' ? '💰' : '🏦';
-  const typeText = type.charAt(0).toUpperCase() + type.slice(1);
-
-  await ctx.answerCbQuery();
-  ctx.reply(`${typeEmoji} ${typeText} Transaction\n\nChoose a category:`, getCategoryKeyboard(type));
-});
-
-// Category selection
-bot.action(/category_(.+)/, async (ctx) => {
+bot.action(/category_(.+)/, (ctx) => {
   const categoryName = ctx.match[1];
-  const userId = ctx.from.id;
-  const session = sessions.get(userId);
-  if (!session) return ctx.reply('❌ Session expired. Please start again.', getMainMenuKeyboard());
+  const session = sessions.get(ctx.from.id) || {};
+  session.category = categoryName;
+  sessions.set(ctx.from.id, session);
 
-  session.category_name = categoryName;
-  session.step = 'amount';
-
-  await ctx.answerCbQuery();
-
-  // If amount already known (photo method), skip amount input
-  if (session.amount) {
-    session.step = 'description';
-
-    const cancelKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('⏭️ Skip Description', 'skip_description')],
-      [Markup.button.callback('🔙 Back', 'back_to_category')],
-    ]);
-
-    return ctx.reply(
-      `💵 Amount detected: ₹${session.amount}\n\nYou can add a description or skip:`,
-      cancelKeyboard
-    );
+  if (session.method === 'manual') {
+    ctx.editMessageText(`Enter the amount for ${categoryName}:`);
+  } else {
+    ctx.editMessageText('Please send the photo now.');
   }
-
-  ctx.reply('💵 Please enter the amount (numbers only):');
 });
 
-// Back to category selection from description step
-bot.action('back_to_category', (ctx) => {
+// Photo handler for photo input method
+bot.on('photo', async (ctx) => {
   const session = sessions.get(ctx.from.id);
-  if (session) {
-    session.step = 'category';
-    delete session.category_name;
-  }
-  ctx.answerCbQuery();
-  ctx.reply('Choose a category:', getCategoryKeyboard(session.type || 'expense'));
-});
-
-// Skip description
-bot.action('skip_description', (ctx) => {
-  const session = sessions.get(ctx.from.id);
-  if (!session) return ctx.reply('❌ Session expired. Please start again.', getMainMenuKeyboard());
-
-  session.description = '';
-  session.step = 'save';
-
-  ctx.answerCbQuery();
-  ctx.reply('Saving your transaction...');
-  saveTransaction(ctx, session);
-});
-
-// Text input handler
-bot.on('text', async (ctx) => {
-  const userId = ctx.from.id;
-  const session = sessions.get(userId);
-  if (!session) return;
-
-  const text = ctx.message.text;
-
-  if (session.step === 'amount') {
-    // Validate amount input
-    const amount = parseFloat(text);
-    if (isNaN(amount) || amount <= 0) {
-      return ctx.reply('❌ Invalid amount. Please enter a valid positive number:');
-    }
-    session.amount = amount;
-    session.step = 'description';
-
-    const cancelKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('⏭️ Skip Description', 'skip_description')],
-      [Markup.button.callback('🔙 Back', 'back_to_category')],
-    ]);
-
-    return ctx.reply('📝 Enter a description or note for this transaction (optional):', cancelKeyboard);
+  if (!session || session.method !== 'photo') {
+    return ctx.reply('Please choose photo input method first by clicking "New Transaction".');
   }
 
-  if (session.step === 'description') {
-    session.description = text;
-    session.step = 'save';
-
-    ctx.reply('Saving your transaction...');
-    return saveTransaction(ctx, session);
-  }
-});
-
-// Save transaction to Supabase
-async function saveTransaction(ctx, session) {
   try {
-    const userId = ctx.from.id;
+    const photoArray = ctx.message.photo;
+    const fileId = photoArray[photoArray.length - 1].file_id; // highest res
+    const fileLink = await ctx.telegram.getFileLink(fileId);
 
-    const { data, error } = await supabase.from('transactions').insert({
-      user_id: userId,
-      type: session.type,
-      category_name: session.category_name,
-      amount: session.amount,
-      description: session.description || '',
-      created_at: new Date().toISOString(),
-    });
+    // Download photo as buffer
+    const response = await fetch(fileLink.href);
+    const buffer = await response.buffer();
+
+    // Save temporarily to local disk (necessary for Google Vision API)
+    const tempImagePath = path.join(__dirname, `temp_${ctx.from.id}.jpg`);
+    fs.writeFileSync(tempImagePath, buffer);
+
+    // Use Google Vision to extract text
+    const [result] = await visionClient.textDetection(tempImagePath);
+    fs.unlinkSync(tempImagePath); // delete temp image
+
+    const detections = result.textAnnotations;
+    if (!detections || detections.length === 0) {
+      return ctx.reply('Could not detect any text in the photo. Please try again or enter manually.');
+    }
+
+    // Extract text and parse amount (simple regex)
+    const text = detections[0].description;
+    const amountMatch = text.match(/(\d+(\.\d{1,2})?)/);
+    if (!amountMatch) {
+      return ctx.reply('Could not find an amount in the photo text. Please enter manually.');
+    }
+
+    const amount = parseFloat(amountMatch[1]);
+    if (isNaN(amount)) {
+      return ctx.reply('Amount detected is not valid. Please enter manually.');
+    }
+
+    session.amount = amount;
+    sessions.set(ctx.from.id, session);
+
+    // Ask for transaction type and category after amount detected
+    await ctx.reply(`Detected amount: ${amount}\nNow select transaction type:`, getTypeKeyboard());
+
+  } catch (error) {
+    console.error(error);
+    ctx.reply('Error processing the photo. Please try again.');
+  }
+});
+
+// Text handler for manual amount input and other texts
+bot.on('text', async (ctx) => {
+  const session = sessions.get(ctx.from.id);
+  if (!session) {
+    return ctx.reply('Please start a new transaction by clicking "New Transaction".');
+  }
+
+  // If manual method and category is selected but amount not yet entered
+  if (session.method === 'manual' && session.category && !session.amount) {
+    const amountStr = ctx.message.text.trim();
+    const amount = parseFloat(amountStr);
+
+    if (isNaN(amount) || amount <= 0) {
+      return ctx.reply('Please enter a valid positive amount.');
+    }
+
+    session.amount = amount;
+    sessions.set(ctx.from.id, session);
+
+    // Save to DB
+    await saveTransaction(ctx.from.id, session, ctx);
+    return;
+  }
+
+  // If no session or step mismatch
+  ctx.reply('Please follow the menu options or type /menu.');
+});
+
+// Function to save transaction in Supabase
+async function saveTransaction(userId, session, ctx) {
+  try {
+    const { amount, category, type } = session;
+    if (!amount || !category || !type) {
+      return ctx.reply('Missing information. Please start again.');
+    }
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .insert([{ user_id: userId, amount, category, type, created_at: new Date().toISOString() }]);
 
     if (error) {
       console.error('Supabase insert error:', error);
-      return ctx.reply('❌ Error saving transaction. Please try again.');
+      return ctx.reply('Failed to save transaction. Please try again later.');
     }
 
     sessions.delete(userId);
+    ctx.reply(`Transaction saved successfully:
+Amount: ${amount}
+Category: ${category}
+Type: ${type}`, getPostSaveKeyboard());
 
-    ctx.reply('✅ Transaction saved successfully!', getPostSaveKeyboard());
-  } catch (error) {
-    console.error('Save transaction error:', error);
-    ctx.reply('❌ Unexpected error. Please try again.');
+  } catch (err) {
+    console.error('saveTransaction error:', err);
+    ctx.reply('An error occurred while saving your transaction.');
   }
 }
 
-bot.launch();
-console.log('Bot started');
+// Placeholder for other menu actions
+bot.action('view_summary', (ctx) => {
+  ctx.editMessageText('Summary feature coming soon! 🛠️');
+});
 
-// Graceful shutdown
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+bot.action('analytics', (ctx) => {
+  ctx.editMessageText('Analytics feature coming soon! 📊');
+});
+
+bot.action('settings', (ctx) => {
+  ctx.editMessageText('Settings feature coming soon! ⚙️');
+});
+
+// =============== WEBHOOK SETUP ===============
+
+const app = express();
+
+const PORT = process.env.PORT || 3000;
+const WEBHOOK_PATH = `/bot${process.env.BOT_TOKEN}`;
+const WEBHOOK_URL = process.env.WEBHOOK_URL || `https://your-render-service.onrender.com${WEBHOOK_PATH}`;
+
+(async () => {
+  try {
+    await bot.telegram.setWebhook(WEBHOOK_URL);
+    console.log(`Webhook set to: ${WEBHOOK_URL}`);
+  } catch (err) {
+    console.error('Failed to set webhook:', err);
+  }
+})();
+
+app.use(bot.webhookCallback(WEBHOOK_PATH));
+
+app.get('/', (req, res) => {
+  res.send('Finance Tracker Bot is running!');
+});
+
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
